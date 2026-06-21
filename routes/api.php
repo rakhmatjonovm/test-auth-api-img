@@ -23,4 +23,7 @@ Route::middleware('auth:sanctum')->group(function () {
 
     Route::post('/images', [ImageController::class, 'store'])
         ->middleware('throttle:images-upload');
+    Route::get('/images', [ImageController::class, 'index']);
+    Route::get('/images/{image}', [ImageController::class, 'show'])
+        ->name('images.show');
 });

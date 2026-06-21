@@ -22,6 +22,7 @@ class ImageResource extends JsonResource
             'size' => $this->imageFile?->size,
             'width' => $this->imageFile?->width,
             'height' => $this->imageFile?->height,
+            'url' => route('images.show', $this->id),
             'created_at' => $this->created_at,
         ];
     }
