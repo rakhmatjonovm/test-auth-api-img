@@ -1,58 +1,134 @@
-<p align="center"><a href="https://laravel.com" target="_blank"><img src="https://raw.githubusercontent.com/laravel/art/master/logo-lockup/5%20SVG/2%20CMYK/1%20Full%20Color/laravel-logolockup-cmyk-red.svg" width="400" alt="Laravel Logo"></a></p>
+# Image API
 
-<p align="center">
-<a href="https://github.com/laravel/framework/actions"><img src="https://github.com/laravel/framework/workflows/tests/badge.svg" alt="Build Status"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/dt/laravel/framework" alt="Total Downloads"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/v/laravel/framework" alt="Latest Stable Version"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/l/laravel/framework" alt="License"></a>
-</p>
+Тестовое задание: REST API на Laravel для загрузки, хранения и управления изображениями с авторизацией, дедупликацией и автоматическим сжатием.
 
-## About Laravel
+## Стек
 
-Laravel is a web application framework with expressive, elegant syntax. We believe development must be an enjoyable and creative experience to be truly fulfilling. Laravel takes the pain out of development by easing common tasks used in many web projects, such as:
+- PHP 8.5, Laravel
+- Laravel Sanctum — токен-авторизация
+- Intervention Image v4 — сжатие и конвертация изображений
+- Очереди (database driver) — асинхронная обработка изображений
+- Pest — тесты
 
-- [Simple, fast routing engine](https://laravel.com/docs/routing).
-- [Powerful dependency injection container](https://laravel.com/docs/container).
-- Multiple back-ends for [session](https://laravel.com/docs/session) and [cache](https://laravel.com/docs/cache) storage.
-- Expressive, intuitive [database ORM](https://laravel.com/docs/eloquent).
-- Database agnostic [schema migrations](https://laravel.com/docs/migrations).
-- [Robust background job processing](https://laravel.com/docs/queues).
-- [Real-time event broadcasting](https://laravel.com/docs/broadcasting).
+## Архитектурные решения
 
-Laravel is accessible, powerful, and provides tools required for large, robust applications.
+### Две таблицы вместо одной
 
-## Learning Laravel
+Изображения хранятся в двух связанных таблицах:
 
-Laravel has the most extensive and thorough [documentation](https://laravel.com/docs) and video tutorial library of all modern web application frameworks, making it a breeze to get started with the framework.
+- **`image_files`** — физический файл на диске. Уникален по `sha256`-хэшу содержимого.
+- **`images`** — запись о том, что конкретный пользователь загрузил конкретный файл (связь `user_id` + `image_file_id`).
 
-In addition, [Laracasts](https://laracasts.com) contains thousands of video tutorials on a range of topics including Laravel, modern PHP, unit testing, and JavaScript. Boost your skills by digging into our comprehensive video library.
+Это разделение даёт дедупликацию "из коробки": если пользователь (или несколько разных пользователей) загружают одно и то же изображение много раз, на диске хранится **один** физический файл, а счётчик `ref_count` в `image_files` отслеживает, сколько записей на него ссылается. Удаление физического файла происходит только когда `ref_count` доходит до нуля.
 
-You can also watch bite-sized lessons with real-world projects on [Laravel Learn](https://laravel.com/learn), where you will be guided through building a Laravel application from scratch while learning PHP fundamentals.
+### Сжатие через очередь
 
-## Agentic Development
+При загрузке файл сразу сохраняется во временную папку, и пользователю мгновенно возвращается ответ со статусом `processing`. Реальная обработка (конвертация в WebP, уменьшение до 2000×2000px) уходит в отдельную джобу (`ProcessUploadedImage`) и обрабатывается воркером очереди. Это позволяет не блокировать HTTP-запрос при больших объёмах одновременных загрузок (по условию задачи — потенциально 100 000+ загрузок в день).
 
-Laravel's predictable structure and conventions make it ideal for AI coding agents like Claude Code, Cursor, and GitHub Copilot. Install [Laravel Boost](https://laravel.com/docs/ai) to supercharge your AI workflow:
+### Шардирование путей на диске
+
+Готовые файлы сохраняются не в одну плоскую папку, а по первым байтам хэша:
+```
+storage/app/private/images/{hash[0:2]}/{hash[2:4]}/{hash}.webp
+```
+Это нужно, чтобы избежать деградации файловой системы при сотнях тысяч файлов в одной директории.
+
+### Приватное хранилище
+
+Файлы лежат вне публичной директории (`storage/app/private`), доступ — только через авторизованный API-эндпоинт с проверкой владельца через `ImagePolicy`. Прямых публичных URL на файлы нет.
+
+## Установка
 
 ```bash
-composer require laravel/boost --dev
-
-php artisan boost:install
+git clone https://github.com/rakhmatjonovm/test-auth-api-img.git
+cd test-auth-api-img
+composer install
+cp .env.example .env
+php artisan key:generate
+php artisan migrate
 ```
 
-Boost provides your agent 15+ tools and skills that help agents build Laravel applications while following best practices.
+## Переменные окружения
 
-## Contributing
+В `.env` важно указать:
+```
+QUEUE_CONNECTION=database
+```
 
-Thank you for considering contributing to the Laravel framework! The contribution guide can be found in the [Laravel documentation](https://laravel.com/docs/contributions).
+## Запуск
 
-## Code of Conduct
+```bash
+php artisan serve
+```
 
-In order to ensure that the Laravel community is welcoming to all, please review and abide by the [Code of Conduct](https://laravel.com/docs/contributions#code-of-conduct).
+⚠️ **Обязательно держите воркер очереди запущенным в отдельном терминале** — без него загруженные изображения навсегда останутся в статусе `processing` (сжатие не произойдёт):
 
-## Security Vulnerabilities
+```bash
+php artisan queue:work
+```
 
-If you discover a security vulnerability within Laravel, please send an e-mail to Taylor Otwell via [taylor@laravel.com](mailto:taylor@laravel.com). All security vulnerabilities will be promptly addressed.
+## API
 
-## License
+Все эндпоинты, кроме `register`/`login`, требуют заголовок `Authorization: Bearer <token>`.
 
-The Laravel framework is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).
+| Метод  | Роут               | Описание                          |
+|--------|---------------------|------------------------------------|
+| POST   | `/api/register`     | Регистрация                       |
+| POST   | `/api/login`         | Логин, получение токена           |
+| POST   | `/api/logout`        | Логаут (отзыв текущего токена)    |
+| POST   | `/api/images`        | Загрузка изображения (jpeg/png, до 5MB) |
+| GET    | `/api/images`        | Список своих изображений (пагинация) |
+| GET    | `/api/images/{id}`   | Получение изображения             |
+| DELETE | `/api/images/{id}`   | Удаление изображения              |
+
+### Примеры запросов
+
+Регистрация:
+```bash
+curl -X POST http://127.0.0.1:8000/api/register \
+  -H "Accept: application/json" -H "Content-Type: application/json" \
+  -d '{"name":"Test","email":"test@example.com","password":"password123","password_confirmation":"password123"}'
+```
+
+Загрузка изображения:
+```bash
+curl -X POST http://127.0.0.1:8000/api/images \
+  -H "Accept: application/json" \
+  -H "Authorization: Bearer <token>" \
+  -F "file=@/путь/к/картинке.jpg"
+```
+
+Список изображений:
+```bash
+curl http://127.0.0.1:8000/api/images \
+  -H "Accept: application/json" -H "Authorization: Bearer <token>"
+```
+
+Получение изображения:
+```bash
+curl http://127.0.0.1:8000/api/images/1 \
+  -H "Accept: application/json" -H "Authorization: Bearer <token>" \
+  --output image.webp
+```
+
+Удаление:
+```bash
+curl -X DELETE http://127.0.0.1:8000/api/images/1 \
+  -H "Accept: application/json" -H "Authorization: Bearer <token>"
+```
+
+## Тесты
+
+```bash
+php artisan test
+```
+
+25 тестов, покрывают авторизацию, валидацию загрузки, дедупликацию, права доступа по владельцу и очистку файлов-сирот.
+
+## Известные ограничения
+
+- **Гонка состояний при одновременной первой загрузке одинакового нового файла.** Если два запроса с одним и тем же ещё не загруженным файлом прилетят строго одновременно, возможен конфликт уникального индекса `hash` в `image_files`. Для продакшена стоит добавить retry с перехватом `QueryException`.
+- **Удаление физического файла отложено на 5 минут** (`DeleteOrphanImageFile`) — намеренная защита от гонки состояний между удалением и параллельной загрузкой того же файла.
+- Для хранения сейчас используется локальный диск. При реальной нагрузке 100k+ загрузок в день стоит вынести хранилище на S3-совместимое хранилище для горизонтального масштабирования между несколькими серверами.
+EOF
+```
