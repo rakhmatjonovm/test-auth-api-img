@@ -26,4 +26,5 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/images', [ImageController::class, 'index']);
     Route::get('/images/{image}', [ImageController::class, 'show'])
         ->name('images.show');
+    Route::delete('/images/{image}', [ImageController::class, 'destroy']);
 });

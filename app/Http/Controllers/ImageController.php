@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Enums\ImageStatus;
 use App\Http\Requests\StoreImageRequest;
 use App\Http\Resources\ImageResource;
+use App\Jobs\DeleteOrphanImageFile;
 use App\Jobs\ProcessUploadedImage;
 use App\Models\Image;
 use App\Models\ImageFile;
@@ -80,5 +81,23 @@ class ImageController extends Controller
         }
 
         return Storage::response($image->imageFile->path);
+    }
+
+    public function destroy(Image $image)
+    {
+        $this->authorize('delete', $image);
+
+        DB::transaction(function () use ($image) {
+            $imageFile = $image->imageFile;
+            $image->delete();
+
+            $imageFile->decrement('ref_count');
+
+            if ($imageFile->fresh()->ref_count <= 0) {
+                DeleteOrphanImageFile::dispatch($imageFile)->delay(now()->addMinutes(5));
+            }
+        });
+
+        return response()->noContent();
     }
 }
