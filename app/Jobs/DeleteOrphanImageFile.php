@@ -20,7 +20,6 @@ class DeleteOrphanImageFile implements ShouldQueue
     {
         $imageFile = $this->imageFile->fresh();
 
-        // за время задержки файл мог снова стать кем-то использован — перепроверяем
         if (! $imageFile || $imageFile->ref_count > 0) {
             return;
         }
